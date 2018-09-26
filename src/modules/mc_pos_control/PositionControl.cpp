@@ -179,8 +179,8 @@ void PositionControl::_positionController()
 	float vel_norm_xy = sqrtf(_vel_sp(0) * _vel_sp(0) + _vel_sp(1) * _vel_sp(1));
 
 	if (vel_norm_xy > _VelMaxXY) {
-		_vel_sp(0) = _vel_sp(0) * _VelMaxXY / vel_norm_xy;
-		_vel_sp(1) = _vel_sp(1) * _VelMaxXY / vel_norm_xy;
+		_vel_sp(0) = 0;//_vel_sp(0) * _VelMaxXY / vel_norm_xy;
+		_vel_sp(1) = 0;//_vel_sp(1) * _VelMaxXY / vel_norm_xy;
 	}
 
 	/* Saturate velocity in D-direction */
