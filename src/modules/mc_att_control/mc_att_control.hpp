@@ -50,6 +50,7 @@
 #include <uORB/topics/sensor_bias.h>
 #include <uORB/topics/sensor_correction.h>
 #include <uORB/topics/sensor_gyro.h>
+#include <uORB/topics/step_input.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_attitude_setpoint.h>
 #include <uORB/topics/vehicle_control_mode.h>
@@ -107,6 +108,7 @@ private:
 	void		vehicle_motor_limits_poll();
 	void		vehicle_rates_setpoint_poll();
 	void		vehicle_status_poll();
+	void        step_input_poll();
 
 	/**
 	 * Attitude controller.
@@ -117,6 +119,12 @@ private:
 	 * Attitude rates controller.
 	 */
 	void		control_attitude_rates(float dt);
+
+	/**
+	 * Checks if the given value is finite.
+	 * If it is, return the value and if not, return zero.
+	 */
+	float       infinite_to_zero(float val);
 
 	/**
 	 * Throttle PID attenuation.
@@ -136,6 +144,7 @@ private:
 	int		_sensor_gyro_sub[MAX_GYRO_COUNT];	/**< gyro data subscription */
 	int		_sensor_correction_sub{-1};	/**< sensor thermal correction subscription */
 	int		_sensor_bias_sub{-1};		/**< sensor in-run bias correction subscription */
+	int     _step_input_sub{-1};        /**< step input subscription*/
 
 	unsigned _gyro_count{1};
 	int _selected_gyro{0};
@@ -160,6 +169,7 @@ private:
 	struct sensor_gyro_s			_sensor_gyro {};	/**< gyro data before thermal correctons and ekf bias estimates are applied */
 	struct sensor_correction_s		_sensor_correction {};	/**< sensor thermal corrections */
 	struct sensor_bias_s			_sensor_bias {};	/**< sensor in-run bias corrections */
+	struct step_input_s             _step_input {};     /**< step input*/
 
 	MultirotorMixer::saturation_status _saturation_status{};
 
@@ -177,6 +187,8 @@ private:
 	matrix::Vector3f _att_control;			/**< attitude control vector */
 
 	matrix::Dcmf _board_rotation;			/**< rotation matrix for the orientation that the board is mounted */
+
+	bool _step_input_available{false};       /**< true if a step input is given to the position controller */
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::MC_ROLL_P>) _roll_p,

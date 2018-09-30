@@ -99,7 +99,7 @@ void PositionControl::updateSetpoint(const vehicle_local_position_setpoint_s &se
 	}
 }
 
-void PositionControl::generateThrustYawSetpoint(const float &dt)
+void PositionControl::generateThrustYawSetpoint(const float &dt, const bool skipPosController)
 {
 	_updateParams();
 
@@ -107,7 +107,9 @@ void PositionControl::generateThrustYawSetpoint(const float &dt)
 	 * if thrust needs to be generated
 	 */
 	if (!_skipController) {
-		_positionController();
+	    if(!skipPosController) {
+	        _positionController();
+	    }
 		_velocityController(dt);
 	}
 }

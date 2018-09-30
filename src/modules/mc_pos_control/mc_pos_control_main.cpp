@@ -57,6 +57,7 @@
 #include <drivers/drv_hrt.h>
 #include <systemlib/hysteresis/hysteresis.h>
 
+#include <uORB/topics/step_input.h>
 #include <uORB/topics/home_position.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
@@ -137,6 +138,7 @@ private:
 	bool 		_lnd_reached_ground = false; 		/**<true if controller assumes the vehicle has reached the ground after landing */
 	bool 		_triplet_lat_lon_finite = true; 		/**<true if triplets current is non-finite */
 	bool		_terrain_follow = false;			/**<true is the position controller is controlling height above ground */
+	bool        _step_input_available = false;      /**<true if a step input is given to the position controller */
 
 	int		_control_task;			/**< task handle for task */
 	orb_advert_t	_mavlink_log_pub;		/**< mavlink log advert */
@@ -150,6 +152,7 @@ private:
 	int		_local_pos_sub;			/**< vehicle local position */
 	int		_pos_sp_triplet_sub;		/**< position setpoint triplet */
 	int		_home_pos_sub; 			/**< home position */
+	int     _step_input_sub;          /**< step input */
 
 	orb_advert_t	_att_sp_pub;			/**< attitude setpoint publication */
 	orb_advert_t	_local_pos_sp_pub;		/**< vehicle local position setpoint publication */
@@ -166,6 +169,7 @@ private:
 	struct position_setpoint_triplet_s		_pos_sp_triplet;	/**< vehicle global position setpoint triplet */
 	struct vehicle_local_position_setpoint_s	_local_pos_sp;		/**< vehicle local position setpoint */
 	struct home_position_s				_home_pos; 				/**< home position */
+	struct step_input_s                 _step_input;              /**< step input */
 
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::MPC_FLT_TSK>) _test_flight_tasks, /**< temporary flag for the transition to flight tasks */
@@ -410,6 +414,8 @@ private:
 	void publish_attitude();
 
 	void publish_local_pos_sp();
+
+	float infinite_to_zero(float val);
 
 	/**
 	 * Shim for calling task_main from task_create.
@@ -747,6 +753,15 @@ MulticopterPositionControl::poll_subscriptions()
 	if (updated) {
 		orb_copy(ORB_ID(home_position), _home_pos_sub, &_home_pos);
 	}
+
+	orb_check(_step_input_sub, &updated);
+
+    if (updated) {
+        orb_copy(ORB_ID(step_input), _step_input_sub, &_step_input);
+        if(_step_input.valid) {
+            _step_input_available = true;
+        }
+    }
 }
 
 float
@@ -2931,6 +2946,7 @@ MulticopterPositionControl::task_main()
 	_local_pos_sub = orb_subscribe(ORB_ID(vehicle_local_position));
 	_pos_sp_triplet_sub = orb_subscribe(ORB_ID(position_setpoint_triplet));
 	_home_pos_sub = orb_subscribe(ORB_ID(home_position));
+	_step_input_sub = orb_subscribe(ORB_ID(step_input));
 
 	parameters_update(true);
 
@@ -3096,41 +3112,93 @@ MulticopterPositionControl::task_main()
 			_flight_tasks.switchTask(FlightTaskIndex::None);
 		}
 
-		if (_test_flight_tasks.get() && _flight_tasks.isAnyTaskActive()) {
+		// position controller should also set setpoints for roll, pitch, yaw. check if they are finite
+		bool is_step_att_finite = (PX4_ISFINITE(_step_input.roll) || PX4_ISFINITE(_step_input.pitch) || PX4_ISFINITE(_step_input.yaw));
 
-			_flight_tasks.update();
+		// Check if a step input is given to one of the attitude angles
+        if(_step_input_available && is_step_att_finite) {
+            float roll = infinite_to_zero(_step_input.roll);
+            float pitch = infinite_to_zero(_step_input.pitch);
+            float yaw = infinite_to_zero(_step_input.yaw);
 
-			/* Get Flighttask setpoints */
-			vehicle_local_position_setpoint_s setpoint = _flight_tasks.getPositionSetpoint();
+            matrix::Eulerf euler = matrix::Eulerf(roll, pitch, yaw);
+            matrix::Quatf quat = euler;
+            quat.copyTo(_att_sp.q_d);
+            _att_sp.q_d_valid = true;
 
-			/* Get _contstraints depending on flight mode
-			 * This logic will be set by FlightTasks */
-			Controller::Constraints constraints;
-			updateConstraints(constraints);
+            _att_sp.roll_body = roll;
+            _att_sp.pitch_body = pitch;
+            _att_sp.yaw_body = yaw;
+            _att_sp.yaw_sp_move_rate = 0.0f;
 
-			/* For takeoff we adjust the velocity setpoint in the z-direction */
-			if (_in_smooth_takeoff) {
-				/* Adjust velocity setpoint in z if we are in smooth takeoff */
-				set_takeoff_velocity(setpoint.vz);
-			}
+            param_get(param_find("MPC_THR_HOVER"), &(_att_sp.thrust));
 
-			/* this logic is only temporary.
-			 * Mode switch related things will be handled within
-			 * Flighttask activate method
-			 */
-			if (_vehicle_status.nav_state
-			    == _vehicle_status.NAVIGATION_STATE_MANUAL) {
-				/* we set triplets to false
-				 * this ensures that when switching to auto, the position
-				 * controller will not use the old triplets but waits until triplets
-				 * have been updated */
-				_mode_auto = false;
-				_pos_sp_triplet.current.valid = false;
-				_pos_sp_triplet.previous.valid = false;
-				_hold_offboard_xy = false;
-				_hold_offboard_z = false;
+            publish_local_pos_sp();
+            publish_attitude();
 
-			}
+            continue;
+        }
+
+        // for a step input to be valid for position control, either one of x,y,z or vx,vy,vz should be finite.
+        bool is_step_input_finite = (PX4_ISFINITE(_step_input.x) || PX4_ISFINITE(_step_input.y) || PX4_ISFINITE(_step_input.z) || PX4_ISFINITE(_step_input.vx) || PX4_ISFINITE(_step_input.vy) || PX4_ISFINITE(_step_input.vz));
+
+        if ((_test_flight_tasks.get() && _flight_tasks.isAnyTaskActive()) || (_step_input_available && is_step_input_finite)) {
+
+		    vehicle_local_position_setpoint_s setpoint;
+		    Controller::Constraints constraints;
+
+		    // Check if the setpoint is from a step input (only for testing) or an actual flight task.
+		    if(_step_input_available && is_step_input_finite) {
+		        setpoint.x = infinite_to_zero(_step_input.x);
+		        setpoint.y = infinite_to_zero(_step_input.y);
+		        setpoint.z = infinite_to_zero(_step_input.z);
+
+		        setpoint.vx = infinite_to_zero(_step_input.vx);
+                setpoint.vy = infinite_to_zero(_step_input.vy);
+                setpoint.vz = infinite_to_zero(_step_input.vz);
+
+                setpoint.yaw = 0.0f;
+                setpoint.yawspeed = 0.0f;
+
+                setpoint.thrust[0] = NAN;
+                setpoint.thrust[1] = NAN;
+                setpoint.thrust[2] = NAN;
+
+                updateConstraints(constraints);
+		    } else {
+                _flight_tasks.update();
+
+                /* Get Flighttask setpoints */
+                setpoint = _flight_tasks.getPositionSetpoint();
+
+                /* Get _contstraints depending on flight mode
+                 * This logic will be set by FlightTasks */
+                updateConstraints(constraints);
+
+                /* For takeoff we adjust the velocity setpoint in the z-direction */
+                if (_in_smooth_takeoff) {
+                    /* Adjust velocity setpoint in z if we are in smooth takeoff */
+                    set_takeoff_velocity(setpoint.vz);
+                }
+
+                /* this logic is only temporary.
+                 * Mode switch related things will be handled within
+                 * Flighttask activate method
+                 */
+                if (_vehicle_status.nav_state
+                    == _vehicle_status.NAVIGATION_STATE_MANUAL) {
+                    /* we set triplets to false
+                     * this ensures that when switching to auto, the position
+                     * controller will not use the old triplets but waits until triplets
+                     * have been updated */
+                    _mode_auto = false;
+                    _pos_sp_triplet.current.valid = false;
+                    _pos_sp_triplet.previous.valid = false;
+                    _hold_offboard_xy = false;
+                    _hold_offboard_z = false;
+
+                }
+		    }
 
 			// We can only run the control if we're already in-air, have a takeoff setpoint,
 			// or if we're in offboard control.
@@ -3141,13 +3209,15 @@ MulticopterPositionControl::task_main()
 
 			} else if (_vehicle_status.nav_state == _vehicle_status.NAVIGATION_STATE_MANUAL ||
 				   _vehicle_status.nav_state == _vehicle_status.NAVIGATION_STATE_POSCTL ||
-				   _vehicle_status.nav_state == _vehicle_status.NAVIGATION_STATE_ALTCTL) {
+				   _vehicle_status.nav_state == _vehicle_status.NAVIGATION_STATE_ALTCTL ||
+				   (_step_input_available && is_step_input_finite)) {
 
+			    bool skipPosController = (_step_input_available && is_step_input_finite) && (setpoint.x <= 1e-3f && setpoint.y <= 1e-3f && setpoint.z <= 1e-3f);
 
 				_control.updateState(_local_pos, matrix::Vector3f(&(_vel_err_d(0))));
 				_control.updateSetpoint(setpoint);
 				_control.updateConstraints(constraints);
-				_control.generateThrustYawSetpoint(_dt);
+				_control.generateThrustYawSetpoint(_dt, skipPosController);
 
 				/* fill local position, velocity and thrust setpoint */
 				_local_pos_sp.timestamp = hrt_absolute_time();
@@ -3167,7 +3237,6 @@ MulticopterPositionControl::task_main()
 
 				_att_sp = ControlMath::thrustToAttitude(thr_sp, _control.getYawSetpoint());
 				_att_sp.yaw_sp_move_rate = _control.getYawspeedSetpoint();
-
 			}
 
 			publish_local_pos_sp();
@@ -3307,6 +3376,16 @@ MulticopterPositionControl::publish_local_pos_sp()
 					    ORB_ID(vehicle_local_position_setpoint),
 					    &_local_pos_sp);
 	}
+}
+
+float
+MulticopterPositionControl::infinite_to_zero(float val)
+{
+    if(PX4_ISFINITE(val)) {
+        return val;
+    } else {
+        return 0.0f;
+    }
 }
 
 void

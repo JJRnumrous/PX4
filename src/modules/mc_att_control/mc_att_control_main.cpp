@@ -358,6 +358,22 @@ MulticopterAttitudeControl::sensor_bias_poll()
 
 }
 
+void
+MulticopterAttitudeControl::step_input_poll()
+{
+    /* check if there is a new message */
+    bool updated;
+    orb_check(_step_input_sub, &updated);
+
+    if (updated) {
+        orb_copy(ORB_ID(step_input), _step_input_sub, &_step_input);
+        if(_step_input.valid) {
+            _step_input_available = true;
+        }
+    }
+
+}
+
 /**
  * Attitude controller.
  * Input: 'vehicle_attitude_setpoint' topics (depending on mode)
@@ -366,8 +382,19 @@ MulticopterAttitudeControl::sensor_bias_poll()
 void
 MulticopterAttitudeControl::control_attitude(float dt)
 {
-	vehicle_attitude_setpoint_poll();
-	_thrust_sp = _v_att_sp.thrust;
+    // Check if a step input is given to one of the attitude rates
+    if(_step_input_available) {
+        if(PX4_ISFINITE(_step_input.rollspeed) || PX4_ISFINITE(_step_input.pitchspeed) || PX4_ISFINITE(_step_input.yawspeed)) {
+            _rates_sp(0) = infinite_to_zero(_step_input.rollspeed);
+            _rates_sp(1) = infinite_to_zero(_step_input.pitchspeed);
+            _rates_sp(2) = infinite_to_zero(_step_input.yawspeed);
+
+            return;
+        }
+    }
+
+    vehicle_attitude_setpoint_poll();
+    _thrust_sp = _v_att_sp.thrust;
 
 	/* prepare yaw weight from the ratio between roll/pitch and yaw gains */
 	Vector3f attitude_gain = _attitude_p;
@@ -452,6 +479,13 @@ MulticopterAttitudeControl::control_attitude(float dt)
 			_rates_int(2) = 0.0f;
 		}
 	}
+
+	// Adjust setpoint, based on whether the attitude should be controlled.
+	if(_step_input_available) {
+	    _rates_sp(0) = (_step_input.control_roll) ? _rates_sp(0) : 0.0f;
+        _rates_sp(1) = (_step_input.control_pitch) ? _rates_sp(1) : 0.0f;
+        _rates_sp(2) = (_step_input.control_yaw) ? _rates_sp(2) : 0.0f;
+	}
 }
 
 /*
@@ -520,9 +554,10 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 	rates(1) -= _sensor_bias.gyro_y_bias;
 	rates(2) -= _sensor_bias.gyro_z_bias;
 
-	Vector3f rates_p_scaled = _rate_p.emult(pid_attenuations(_tpa_breakpoint_p.get(), _tpa_rate_p.get()));
-	Vector3f rates_i_scaled = _rate_i.emult(pid_attenuations(_tpa_breakpoint_i.get(), _tpa_rate_i.get()));
-	Vector3f rates_d_scaled = _rate_d.emult(pid_attenuations(_tpa_breakpoint_d.get(), _tpa_rate_d.get()));
+	// we do not need TPA
+	Vector3f rates_p_scaled = _rate_p;//.emult(pid_attenuations(_tpa_breakpoint_p.get(), _tpa_rate_p.get()));
+	Vector3f rates_i_scaled = _rate_i;//.emult(pid_attenuations(_tpa_breakpoint_i.get(), _tpa_rate_i.get()));
+	Vector3f rates_d_scaled = _rate_d;//.emult(pid_attenuations(_tpa_breakpoint_d.get(), _tpa_rate_d.get()));
 
 	/* angular rates error */
 	Vector3f rates_err = _rates_sp - rates;
@@ -585,6 +620,16 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 	}
 }
 
+float
+MulticopterAttitudeControl::infinite_to_zero(float val)
+{
+    if(PX4_ISFINITE(val)) {
+        return val;
+    } else {
+        return 0.0f;
+    }
+}
+
 void
 MulticopterAttitudeControl::run()
 {
@@ -614,6 +659,7 @@ MulticopterAttitudeControl::run()
 
 	_sensor_correction_sub = orb_subscribe(ORB_ID(sensor_correction));
 	_sensor_bias_sub = orb_subscribe(ORB_ID(sensor_bias));
+	_step_input_sub = orb_subscribe(ORB_ID(step_input));
 
 	/* wakeup source: gyro data from sensor selected by the sensor app */
 	px4_pollfd_struct_t poll_fds = {};
@@ -673,6 +719,7 @@ MulticopterAttitudeControl::run()
 			vehicle_attitude_poll();
 			sensor_correction_poll();
 			sensor_bias_poll();
+			step_input_poll();
 
 			/* Check if we are in rattitude mode and the pilot is above the threshold on pitch
 			 * or roll (yaw can rotate 360 in normal att control).  If both are true don't
@@ -741,9 +788,9 @@ MulticopterAttitudeControl::run()
 				control_attitude_rates(dt);
 
 				/* publish actuator controls */
-				_actuators.control[0] = 0.0f;//(PX4_ISFINITE(_att_control(0))) ? _att_control(0) : 0.0f;
-				_actuators.control[1] = 0.0f;//(PX4_ISFINITE(_att_control(1))) ? _att_control(1) : 0.0f;
-				_actuators.control[2] = 0.0f;//(PX4_ISFINITE(_att_control(2))) ? _att_control(2) : 0.0f;
+				_actuators.control[0] = (_step_input_available && !_step_input.control_roll) ? 0.0f : (PX4_ISFINITE(_att_control(0))) ? _att_control(0) : 0.0f;
+				_actuators.control[1] = (_step_input_available && !_step_input.control_pitch) ? 0.0f : (PX4_ISFINITE(_att_control(1))) ? _att_control(1) : 0.0f;
+				_actuators.control[2] = (_step_input_available && !_step_input.control_yaw) ? 0.0f : (PX4_ISFINITE(_att_control(2))) ? _att_control(2) : 0.0f;
 				_actuators.control[3] = (PX4_ISFINITE(_thrust_sp)) ? _thrust_sp : 0.0f;
 				_actuators.control[7] = _v_att_sp.landing_gear;
 				_actuators.timestamp = hrt_absolute_time();
@@ -846,6 +893,7 @@ MulticopterAttitudeControl::run()
 
 	orb_unsubscribe(_sensor_correction_sub);
 	orb_unsubscribe(_sensor_bias_sub);
+	orb_unsubscribe(_step_input_sub);
 }
 
 int MulticopterAttitudeControl::task_spawn(int argc, char *argv[])

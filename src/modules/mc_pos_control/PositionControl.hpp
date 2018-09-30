@@ -67,7 +67,7 @@ public:
 	void updateState(const vehicle_local_position_s &state, const matrix::Vector3f &vel_dot);
 	void updateSetpoint(const vehicle_local_position_setpoint_s &setpoint);
 	void updateConstraints(const Controller::Constraints &constraints);
-	void generateThrustYawSetpoint(const float &dt);
+	void generateThrustYawSetpoint(const float &dt, const bool skipPosController);
 
 	matrix::Vector3f getThrustSetpoint() {return _thr_sp;}
 	float getYawSetpoint() { return _yaw_sp;}

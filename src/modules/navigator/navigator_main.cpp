@@ -380,7 +380,7 @@ Navigator::run()
 				// CMD_DO_REPOSITION is acknowledged by commander
 
 			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_NAV_TAKEOFF) {
-				position_setpoint_triplet_s *rep = get_takeoff_triplet();
+			    position_setpoint_triplet_s *rep = get_takeoff_triplet();
 
 				// store current position as previous position and goal as next
 				rep->previous.yaw = get_global_position()->yaw;
