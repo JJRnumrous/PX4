@@ -32,8 +32,8 @@
  ****************************************************************************/
 
 #include <lib/mixer/mixer.h>
-#include <mathlib/math/filter/LowPassFilter2p.hpp>
-#include <matrix/matrix/math.hpp>
+#include <lib/mathlib/math/filter/LowPassFilter2p.hpp>
+#include <lib/matrix/matrix/math.hpp>
 #include <perf/perf_counter.h>
 #include <px4_config.h>
 #include <px4_defines.h>

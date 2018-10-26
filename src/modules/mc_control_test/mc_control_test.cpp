@@ -212,7 +212,7 @@ void MulticopterControlTest::run()
 
         if(ready && !commanded) {
             // command step
-            step.x = 10.0;
+            step.vx = 1;//M_PI/180.0;
             step.control_pitch = true;
 
             step.valid = true;
