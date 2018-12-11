@@ -59,6 +59,9 @@ set(config_module_list
 	modules/mc_pos_control
 	modules/vtol_att_control # FIXME: only required for params needed by Navigator
 
+	modules/mc_openloop_test
+	modules/mc_control_test
+
 	#
 	# Logging
 	#

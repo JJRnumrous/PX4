@@ -36,6 +36,7 @@
 #include <px4_getopt.h>
 #include <px4_log.h>
 #include <px4_posix.h>
+#include <drivers/drv_hrt.h>
 
 #include <math.h>
 
@@ -44,14 +45,17 @@
 #include <uORB/topics/step_input.h>
 #include <uORB/topics/vehicle_command.h>
 
-int MulticopterControlTest::print_usage(const char *reason)
-{
-	if (reason) {
-		PX4_WARN("%s\n", reason);
-	}
+#define STEP_DURATION 5.0 // duration of the step (in seconds) || set to NAN if step should not change
+#define STEP_TYPE 1 // list below || default is pitchspeed
+#define STEP_VAL 1.0 // value to step to
 
-	PRINT_MODULE_DESCRIPTION(
-		R"DESCR_STR(
+int MulticopterControlTest::print_usage(const char *reason) {
+    if (reason) {
+        PX4_WARN("%s\n", reason);
+    }
+
+    PRINT_MODULE_DESCRIPTION(
+            R"DESCR_STR(
 ### Description
 Module to test multicopter controllers.
 Commands step responses for various controllers.
@@ -65,92 +69,190 @@ $ module start
 
 )DESCR_STR");
 
-	PRINT_MODULE_USAGE_NAME("mc_control_test", "modules");
-	PRINT_MODULE_USAGE_COMMAND("start");
-	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
+    PRINT_MODULE_USAGE_NAME("mc_control_test", "modules");
+    PRINT_MODULE_USAGE_COMMAND("start");
+    PRINT_MODULE_USAGE_DEFAULT_COMMANDS()
+    ;
 
-	return 0;
+    PRINT_MODULE_USAGE_PARAM_INT('t', STEP_TYPE, 1, 12, "Step Type (PR, RR, YR, P, R, Y, VX, VY, VZ, X, Y, Z)", true);
+    PRINT_MODULE_USAGE_PARAM_FLOAT('v', STEP_VAL, 0.001, 10.0, "Step value (in degree or meters)", true);
+    PRINT_MODULE_USAGE_PARAM_FLOAT('d', STEP_DURATION, 0.1, 10.0, "Step duration (in seconds)", true);
+
+    return 0;
 }
 
-int MulticopterControlTest::print_status()
-{
-	PX4_INFO("Running");
+int MulticopterControlTest::print_status() {
+    PX4_INFO("Running");
 
-	return 0;
+    return 0;
 }
 
-int MulticopterControlTest::custom_command(int argc, char *argv[])
-{
-	if (!is_running()) {
-		print_usage("not running");
-		return 1;
-	}
+int MulticopterControlTest::custom_command(int argc, char *argv[]) {
+    if (!is_running()) {
+        print_usage("not running");
+        return 1;
+    }
 
-	return print_usage("unknown command");
+    return print_usage("unknown command");
 }
 
+int MulticopterControlTest::task_spawn(int argc, char *argv[]) {
+    _task_id = px4_task_spawn_cmd("mc_control_test", SCHED_DEFAULT,
+    SCHED_PRIORITY_DEFAULT, 1024, (px4_main_t) &run_trampoline,
+            (char * const *) argv);
 
-int MulticopterControlTest::task_spawn(int argc, char *argv[])
-{
-	_task_id = px4_task_spawn_cmd("mc_control_test",
-				      SCHED_DEFAULT,
-				      SCHED_PRIORITY_DEFAULT,
-				      1024,
-				      (px4_main_t)&run_trampoline,
-				      (char *const *)argv);
+    if (_task_id < 0) {
+        _task_id = -1;
+        return -errno;
+    }
 
-	if (_task_id < 0) {
-		_task_id = -1;
-		return -errno;
-	}
-
-	return 0;
+    return 0;
 }
 
-MulticopterControlTest *MulticopterControlTest::instantiate(int argc, char *argv[])
-{
-	MulticopterControlTest *instance = new MulticopterControlTest();
+MulticopterControlTest *MulticopterControlTest::instantiate(int argc,
+        char *argv[]) {
+    int ch;
+    int myoptind = 1;
+    const char *myoptarg = nullptr;
 
-	if (instance == nullptr) {
-		PX4_ERR("alloc failed");
-	}
+    float val = STEP_VAL;
+    float dur = STEP_DURATION;
+    int type = STEP_TYPE;
 
-	return instance;
+    int param_int;
+    float param_val;
+
+    while ((ch = px4_getopt(argc, argv, "t:v:d", &myoptind, &myoptarg)) != EOF) {
+        char *ep;
+        PX4_INFO("strtof: %f", (double)strtof(myoptarg, &ep));
+        switch (ch) {
+        case 't':
+            param_int = (int)strtof(myoptarg, &ep);
+            type = param_int;
+            break;
+        case 'd':
+            param_val = strtof(myoptarg, &ep);
+            dur = param_val;
+            PX4_INFO("peram_val: %F", (double)param_val);
+            break;
+        case 'v':
+            param_val = strtof(myoptarg, &ep);
+            val = param_val;
+            break;
+        }
+
+    }
+
+    MulticopterControlTest *instance = new MulticopterControlTest(type, dur, val);
+
+    if (instance == nullptr) {
+        PX4_ERR("alloc failed");
+    }
+
+    return instance;
 }
 
-MulticopterControlTest::MulticopterControlTest() : ModuleParams(nullptr)
-{
+MulticopterControlTest::MulticopterControlTest(int type, float dur, float val) : ModuleParams(nullptr) {
+    _val = val;
+    _dur = dur;
+    _type = type;
+    PX4_INFO("dur: %F", (double)dur);
     // subscribe to vehicle command - used to check for takeoff
     _vehicle_command_sub = orb_subscribe(ORB_ID(vehicle_command));
 
     // subscribe to global position - used for takeoff
-    _vehicle_global_position_sub = orb_subscribe(ORB_ID(vehicle_global_position));
+    _vehicle_global_position_sub = orb_subscribe(
+            ORB_ID(vehicle_global_position));
 
     // subscribe to local position - used to check when vehicle is in stable hover
     _vehicle_local_position_sub = orb_subscribe(ORB_ID(vehicle_local_position));
 
     // advertise vehicle position setpoint triplet
     memset(&_rep, 0, sizeof(_rep));
-    _pos_sp_triplet_pub = orb_advertise(ORB_ID(position_setpoint_triplet), &_rep);
+    _pos_sp_triplet_pub = orb_advertise(ORB_ID(position_setpoint_triplet),
+            &_rep);
 }
 
-void MulticopterControlTest::run()
-{
-	bool ready = false; // indicates whether testing can start
-	bool commanded = false; // indicates whether a step input is commanded - only need to command once
+void MulticopterControlTest::type_setting(int type, struct step_input_s *step, float val) {
 
-	float takeoff_height; // the height at which the vehicle will hover when a takeoff is commanded
+    switch (type) {
+    case 1:
+        step->pitchspeed = val*(float)M_PI/180.0f;
+        step->control_pitch = true;
+        break;
+    case 2:
+        step->rollspeed = val*(float)M_PI / 180.0f;
+        step->control_roll = true;
+        break;
+    case 3:
+        step->yawspeed = val*(float)M_PI / 180.0f;
+        step->control_yaw = true;
+        break;
+    case 4:
+        step->pitch = val*(float) M_PI / 180.0f;
+        step->control_pitch = true;
+        break;
+    case 5:
+        step->roll = val*(float) M_PI / 180.0f;
+        step->control_roll = true;
+        break;
+    case 6:
+        step->yaw = val*(float) M_PI / 180.0f;
+        step->control_yaw = true;
+        break;
+    case 7:
+        step->vx = val;
+        step->control_pitch = true;
+        break;
+    case 8:
+        step->vy = val;
+        step->control_roll = true;
+        break;
+    case 9:
+        step->vz = val;
+        break;
+    case 10:
+        step->z = 0.0;
+        step->y = 0.0;
+        step->x = val;
+        step->control_pitch = true;
+        break;
+    case 11:
+        step->x = 0.0;
+        step->z = 0.0;
+        step->y = val;
+        step->control_roll = true;
+        break;
+    case 12:
+        step->x = 0.0;
+        step->y = 0.0;
+        step->z = val;
+        break;
+    }
 
-	px4_pollfd_struct_t fds[1];
-	fds[0].fd = _vehicle_local_position_sub;
-	fds[0].events = POLLIN;
+}
 
-	// initialize parameters
-	int parameter_update_sub = orb_subscribe(ORB_ID(parameter_update));
-	parameters_update(parameter_update_sub, true);
 
-	// advertise to step_input
-	struct step_input_s step;
+
+void MulticopterControlTest::run() {
+    bool ready = false; // indicates whether testing can start
+    bool commanded = false; // indicates whether a step input is commanded - only need to command once
+    bool step_down = false; //used if the step has finite duration
+
+    float takeoff_height; // the height at which the vehicle will hover when a takeoff is commanded
+
+    hrt_abstime step_time = 0; //used to store the time that the step was given
+
+    px4_pollfd_struct_t fds[1];
+    fds[0].fd = _vehicle_local_position_sub;
+    fds[0].events = POLLIN;
+
+    // initialize parameters
+    int parameter_update_sub = orb_subscribe(ORB_ID(parameter_update));
+    parameters_update(parameter_update_sub, true);
+
+    // advertise to step_input
+    struct step_input_s step;
     memset(&step, 0, sizeof(step));
     orb_advert_t step_input_pub = orb_advertise(ORB_ID(step_input), &step);
 
@@ -171,11 +273,12 @@ void MulticopterControlTest::run()
     step.control_roll = false;
     step.control_pitch = false;
     step.control_yaw = false;
+    ready = true;
 
-	while (!should_exit()) {
+    while (!should_exit()) {
 
-	    // Check if testing can start. Will only start when vehicle is in stable hover
-        if(!ready) {
+        // Check if testing can start. Will only start when vehicle is in stable hover
+        if (!ready) {
             // wait for up to 1000ms for data
             int pret = px4_poll(fds, (sizeof(fds) / sizeof(fds[0])), 1000);
 
@@ -190,7 +293,8 @@ void MulticopterControlTest::run()
 
             } else if (fds[0].revents & POLLIN) {
                 // obtain current position
-                orb_copy(ORB_ID(vehicle_local_position), _vehicle_local_position_sub, &_local_pos);
+                orb_copy(ORB_ID(vehicle_local_position),
+                        _vehicle_local_position_sub, &_local_pos);
 
                 // poll vehicle global position.
                 vehicle_global_position_poll();
@@ -203,50 +307,59 @@ void MulticopterControlTest::run()
                 takeoff_height *= -1; // height in DOWN position (negative)
 
                 // check whether in stable hover at takeoff height
-                if(fabsf(_local_pos.z - takeoff_height) <= (float)(0.1) || ready)
-                {
+                if (fabsf(_local_pos.z - takeoff_height) <= (float) (0.001)
+                        || ready) {
                     ready = true;
                 }
             }
         }
 
-        if(ready && !commanded) {
+        if (ready && !commanded) {
             // command step
-            step.vx = 1;//M_PI/180.0;
-            step.control_pitch = true;
+            type_setting(_type, &step, _val);
 
             step.valid = true;
             orb_publish(ORB_ID(step_input), step_input_pub, &step);
-
             // don't publish another step input
             commanded = true;
-        } else if(!ready) {
+            step_time = hrt_absolute_time();
+            PX4_INFO("_dur: %F", (double)_dur);
+        } else if (commanded && PX4_ISFINITE(_dur) && !step_down) {
+            if (hrt_absolute_time() - step_time >= _dur * 1e6f) {
+                // command down step
+                type_setting(_type, &step, 0.0f);
+                step.valid = true;
+                orb_publish(ORB_ID(step_input), step_input_pub, &step);
+                // don't publish another step input
+                step_down = true;
+            }
+
+        } else if (!ready) {
             step.valid = true;
             orb_publish(ORB_ID(step_input), step_input_pub, &step);
         }
 
-		parameters_update(parameter_update_sub);
-	}
+        parameters_update(parameter_update_sub);
+    }
 
-	orb_unsubscribe(_vehicle_command_sub);
-	orb_unsubscribe(_vehicle_global_position_sub);
-	orb_unsubscribe(_vehicle_local_position_sub);
-	orb_unsubscribe(parameter_update_sub);
+    orb_unsubscribe(_vehicle_command_sub);
+    orb_unsubscribe(_vehicle_global_position_sub);
+    orb_unsubscribe(_vehicle_local_position_sub);
+    orb_unsubscribe(parameter_update_sub);
 }
 
-void MulticopterControlTest::vehicle_global_position_poll()
-{
+void MulticopterControlTest::vehicle_global_position_poll() {
     /* vehicle_command updated */
     bool updated;
     orb_check(_vehicle_global_position_sub, &updated);
 
     if (updated) {
-        orb_copy(ORB_ID(vehicle_global_position), _vehicle_global_position_sub, &_global_pos);
+        orb_copy(ORB_ID(vehicle_global_position), _vehicle_global_position_sub,
+                &_global_pos);
     }
 }
 
-void MulticopterControlTest::vehicle_command_poll()
-{
+void MulticopterControlTest::vehicle_command_poll() {
     /* vehicle_command updated */
     bool updated;
     orb_check(_vehicle_command_sub, &updated);
@@ -270,8 +383,12 @@ void MulticopterControlTest::vehicle_command_poll()
             _rep.previous.valid = false;
 
             if (PX4_ISFINITE(cmd.param5) && PX4_ISFINITE(cmd.param6)) {
-                _rep.current.lat = (cmd.param5 < 1000) ? cmd.param5 : cmd.param5 / (double)1e7;
-                _rep.current.lon = (cmd.param6 < 1000) ? cmd.param6 : cmd.param6 / (double)1e7;
+                _rep.current.lat =
+                        (cmd.param5 < 1000) ?
+                                cmd.param5 : cmd.param5 / (double) 1e7;
+                _rep.current.lon =
+                        (cmd.param6 < 1000) ?
+                                cmd.param6 : cmd.param6 / (double) 1e7;
 
             } else {
                 // If one of them is non-finite, reset both
@@ -285,29 +402,29 @@ void MulticopterControlTest::vehicle_command_poll()
             _rep.next.valid = false;
 
             // CMD_NAV_TAKEOFF is acknowledged by commander
-            orb_publish(ORB_ID(position_setpoint_triplet), _pos_sp_triplet_pub, &_rep);
+            orb_publish(ORB_ID(position_setpoint_triplet), _pos_sp_triplet_pub,
+                    &_rep);
         }
     }
 }
 
-void MulticopterControlTest::parameters_update(int parameter_update_sub, bool force)
-{
-	bool updated;
-	struct parameter_update_s param_upd;
 
-	orb_check(parameter_update_sub, &updated);
+void MulticopterControlTest::parameters_update(int parameter_update_sub,
+bool force) {
+    bool updated;
+    struct parameter_update_s param_upd;
 
-	if (updated) {
-		orb_copy(ORB_ID(parameter_update), parameter_update_sub, &param_upd);
-	}
+    orb_check(parameter_update_sub, &updated);
 
-	if (force || updated) {
-		updateParams();
-	}
+    if (updated) {
+        orb_copy(ORB_ID(parameter_update), parameter_update_sub, &param_upd);
+    }
+
+    if (force || updated) {
+        updateParams();
+    }
 }
 
-
-int mc_control_test_main(int argc, char *argv[])
-{
-	return MulticopterControlTest::main(argc, argv);
+int mc_control_test_main(int argc, char *argv[]) {
+    return MulticopterControlTest::main(argc, argv);
 }

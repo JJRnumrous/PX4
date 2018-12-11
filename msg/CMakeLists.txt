@@ -76,6 +76,7 @@ set(msg_files
 	multirotor_motor_limits.msg
 	obstacle_distance.msg
 	offboard_control_mode.msg
+	openloop_input.msg
 	optical_flow.msg
 	parameter_update.msg
 	ping.msg

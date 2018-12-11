@@ -45,6 +45,7 @@
 #include <uORB/topics/battery_status.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/multirotor_motor_limits.h>
+#include <uORB/topics/openloop_input.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/rate_ctrl_status.h>
 #include <uORB/topics/sensor_bias.h>
@@ -109,6 +110,7 @@ private:
 	void		vehicle_rates_setpoint_poll();
 	void		vehicle_status_poll();
 	void        step_input_poll();
+	void        openloop_input_poll();
 
 	/**
 	 * Attitude controller.
@@ -145,6 +147,7 @@ private:
 	int		_sensor_correction_sub{-1};	/**< sensor thermal correction subscription */
 	int		_sensor_bias_sub{-1};		/**< sensor in-run bias correction subscription */
 	int     _step_input_sub{-1};        /**< step input subscription*/
+	int     _openloop_input_sub{-1};    /**< openloop input subscription*/
 
 	unsigned _gyro_count{1};
 	int _selected_gyro{0};
@@ -170,6 +173,7 @@ private:
 	struct sensor_correction_s		_sensor_correction {};	/**< sensor thermal corrections */
 	struct sensor_bias_s			_sensor_bias {};	/**< sensor in-run bias corrections */
 	struct step_input_s             _step_input {};     /**< step input*/
+	struct openloop_input_s         _openloop_input {}; /**< openloop input*/
 
 	MultirotorMixer::saturation_status _saturation_status{};
 

@@ -3212,7 +3212,7 @@ MulticopterPositionControl::task_main()
 				   _vehicle_status.nav_state == _vehicle_status.NAVIGATION_STATE_ALTCTL ||
 				   (_step_input_available && is_step_input_finite)) {
 
-			    bool skipPosController = (_step_input_available && is_step_input_finite) && (setpoint.x <= 1e-3f && setpoint.y <= 1e-3f && setpoint.z <= 1e-3f);
+			    bool skipPosController = (_step_input_available && is_step_input_finite) && (abs(setpoint.x) <= 1e-3f && abs(setpoint.y) <= 1e-3f && abs(setpoint.z) <= 1e-3f);
 
 				_control.updateState(_local_pos, matrix::Vector3f(&(_vel_err_d(0))));
 				_control.updateSetpoint(setpoint);

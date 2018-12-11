@@ -93,6 +93,7 @@ set(config_module_list
 	modules/vtol_att_control
 	
 	modules/mc_control_test
+	modules/mc_openloop_test
 
 	#
 	# Logging

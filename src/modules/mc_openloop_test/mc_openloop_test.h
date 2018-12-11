@@ -36,24 +36,23 @@
 #include <px4_module.h>
 #include <px4_module_params.h>
 
-#include <uORB/topics/position_setpoint_triplet.h>
-#include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/home_position.h>
 
-extern "C" __EXPORT int mc_control_test_main(int argc, char *argv[]);
+extern "C" __EXPORT int mc_openloop_test_main(int argc, char *argv[]);
 
-class MulticopterControlTest : public ModuleBase<MulticopterControlTest>, public ModuleParams
+class MulticopterOpenloopTest : public ModuleBase<MulticopterOpenloopTest>, public ModuleParams
 {
 public:
-    MulticopterControlTest(int type, float dur, float val);
+    MulticopterOpenloopTest(float duration, float value, float wait, float gap);
 
-    virtual ~MulticopterControlTest() = default;
+    virtual ~MulticopterOpenloopTest() = default;
 
     /** @see ModuleBase */
     static int task_spawn(int argc, char *argv[]);
 
     /** @see ModuleBase */
-    static MulticopterControlTest *instantiate(int argc, char *argv[]);
+    static MulticopterOpenloopTest *instantiate(int argc, char *argv[]);
 
     /** @see ModuleBase */
     static int custom_command(int argc, char *argv[]);
@@ -69,29 +68,20 @@ public:
 
 private:
 
-    // pulse type and size
-    float _val;
-    int _type; //ex. pitchspeed
-    float _dur; //step duration
+    // Impulses
+    float _duration; // duration of an impulse
+    float _val; // the amplitude of the impulse
+    float _wait; // the waiting time for the negative impulse
+    float _gap; // the gap between impulse sets
 
     // Subscribe
-    int _vehicle_command_sub;
-    int _vehicle_global_position_sub;
     int _vehicle_local_position_sub;
+    int _home_position_sub;
 
-    struct vehicle_global_position_s _global_pos;
     struct vehicle_local_position_s _local_pos;
+    struct home_position_s _home_pos;
 
-    // Publish
-    orb_advert_t _pos_sp_triplet_pub;
-
-    struct position_setpoint_triplet_s _rep;
-
-    void vehicle_global_position_poll();
-    void vehicle_command_poll();
-
-    // Setting type of step from parameter
-    void type_setting(int type, struct step_input_s *step, float val);
+    void home_position_poll();
 
     /**
      * Check for parameter changes and update them if needed.
@@ -100,9 +90,4 @@ private:
      */
     void parameters_update(int parameter_update_sub, bool force = false);
 
-
-    DEFINE_PARAMETERS(
-        (ParamInt<px4::params::SYS_AUTOSTART>) _sys_autostart,   /**< example parameter */
-        (ParamInt<px4::params::SYS_AUTOCONFIG>) _sys_autoconfig  /**< another parameter */
-    )
 };
