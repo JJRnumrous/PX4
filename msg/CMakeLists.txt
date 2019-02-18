@@ -76,6 +76,7 @@ set(msg_files
 	mission.msg
 	mission_result.msg
 	mount_orientation.msg
+	motor_current.msg # custom motor current message
 	multirotor_motor_limits.msg
 	obstacle_distance.msg
 	offboard_control_mode.msg

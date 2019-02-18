@@ -35,6 +35,7 @@ px4_add_board(
 		magnetometer # all available magnetometer drivers
 		#md25
 		mkblctrl
+		motor_current/mcp3428 # custom motor current module
 		lights/pca8574
 		pca9685
 		#pmw3901
