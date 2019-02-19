@@ -96,7 +96,6 @@ $ pwm test -c 13 -p 1200
 
 )DESCR_STR");
 
-
 	PRINT_MODULE_USAGE_NAME("pwm", "command");
 
 	PRINT_MODULE_USAGE_COMMAND_DESCR("info", "Print current configuration of all channels");
@@ -107,6 +106,12 @@ $ pwm test -c 13 -p 1200
 
 	PRINT_MODULE_USAGE_PARAM_COMMENT("The command 'test' requires a PWM value:");
 	PRINT_MODULE_USAGE_PARAM_INT('p', -1, 0, 4000, "PWM value (eg. 1100)", false);
+
+	PRINT_MODULE_USAGE_PARAM_COMMENT("The command 'steps' requires the following values:");
+	PRINT_MODULE_USAGE_PARAM_INT('l', -1, 0, 4000, "Low PWM value (eg. 1100)", false);
+	PRINT_MODULE_USAGE_PARAM_INT('h', -1, 0, 4000, "High PWM value (eg. 1700)", false);
+	PRINT_MODULE_USAGE_PARAM_INT('s', -1, 0, 4000, "Step size PWM value (eg. 50)", false);
+	PRINT_MODULE_USAGE_PARAM_INT('t', -1, 0, 4000, "Time (in seconds) between steps (eg. 50)", false);
 
 	PRINT_MODULE_USAGE_PARAM_COMMENT("The commands 'test' and 'steps' "
 					 "additionally require to specify the channels with one of the following commands:");
@@ -128,7 +133,6 @@ int
 pwm_test_main(int argc, char *argv[])
 {
 	const char *dev = PWM_OUTPUT0_DEVICE_PATH;
-	int alt_rate = -1; // Default to indicate not set.
 	uint32_t alt_channel_groups = 0;
 	bool print_verbose = false;
 	bool error_on_warn = false;
@@ -141,6 +145,10 @@ pwm_test_main(int argc, char *argv[])
 	unsigned long channels;
 	unsigned single_ch = 0;
 	int pwm_value = 0;
+	int min_pwm = 0;
+	int max_pwm = 0;
+	int step_pwm = 0;
+	int step_time = 0;
 
 	if (argc < 2) {
 		usage(nullptr);
@@ -219,9 +227,30 @@ pwm_test_main(int argc, char *argv[])
 			}
 			break;
 
-		case 'r':
-			if (px4_get_parameter_value(myoptarg, alt_rate) != 0) {
-				PX4_ERR("CLI argument parsing for PWM rate failed");
+		case 'l':
+			if (px4_get_parameter_value(myoptarg, min_pwm) != 0) {
+				PX4_ERR("CLI argument parsing for min PWM value failed");
+				return 1;
+			}
+			break;
+
+		case 'h':
+			if (px4_get_parameter_value(myoptarg, max_pwm) != 0) {
+				PX4_ERR("CLI argument parsing for max PWM value failed");
+				return 1;
+			}
+			break;
+
+		case 's':
+			if (px4_get_parameter_value(myoptarg, step_pwm) != 0) {
+				PX4_ERR("CLI argument parsing for step PWM value failed");
+				return 1;
+			}
+			break;
+
+		case 't':
+			if (px4_get_parameter_value(myoptarg, step_time) != 0) {
+				PX4_ERR("CLI argument parsing for step time value failed");
 				return 1;
 			}
 			break;
@@ -378,6 +407,26 @@ err_out_no_test:
 			return 1;
 		}
 
+		if (min_pwm == 0) {
+			usage("no min PWM provided");
+			return 1;
+		}
+
+		if (max_pwm == 0) {
+			usage("no max PWM provided");
+			return 1;
+		}
+
+		if (step_pwm == 0) {
+			usage("no step PWM provided");
+			return 1;
+		}
+
+		if (step_time == 0) {
+			usage("no step time provided");
+			return 1;
+		}
+
 		/* get current servo values */
 		struct pwm_output_values last_spos;
 
@@ -398,7 +447,7 @@ err_out_no_test:
 		fds.fd = 0; /* stdin */
 		fds.events = POLLIN;
 
-		PX4_WARN("Running 5 steps. WARNING! Motors will be live in 5 seconds\nPress any key to abort now.");
+		PX4_WARN("Running steps. WARNING! Motors will be live in 5 seconds\nPress any key to abort now.");
 		px4_sleep(5);
 
 		if (::ioctl(fd, PWM_SERVO_SET_MODE, PWM_SERVO_ENTER_TEST_MODE) < 0) {
@@ -406,48 +455,29 @@ err_out_no_test:
 				goto err_out_no_test;
 		}
 
-		unsigned off = 900;
-		unsigned idle = 1300;
-		unsigned full = 2000;
-		unsigned steps_timings_us[] = {2000, 5000, 20000, 50000};
-
-		unsigned phase = 0;
-		unsigned phase_counter = 0;
-		unsigned const phase_maxcount = 20;
+		unsigned num_steps = abs(max_pwm - min_pwm) / abs(step_pwm);
+		unsigned current_val = min_pwm; // set current val
 
 		for (unsigned steps_timing_index = 0;
-		     steps_timing_index < sizeof(steps_timings_us) / sizeof(steps_timings_us[0]);
+		     steps_timing_index <= num_steps;
 		     steps_timing_index++) {
 
-			PX4_INFO("Step input (0 to 100%%) over %u us ramp", steps_timings_us[steps_timing_index]);
+			PX4_INFO("Step input: %u", current_val);
 
-			while (1) {
-				for (unsigned i = 0; i < servo_count; i++) {
-					if (set_mask & 1 << i) {
+			for (unsigned i = 0; i < servo_count; i++) {
+				if (set_mask & 1 << i) {
 
-						unsigned val;
+					ret = px4_ioctl(fd, PWM_SERVO_SET(i), current_val);
 
-						if (phase == 0) {
-							val = idle;
-
-						} else if (phase == 1) {
-							/* ramp - depending how steep it is this ramp will look instantaneous on the output */
-							val = idle + (full - idle) * ((float)phase_counter / phase_maxcount);
-
-						} else {
-							val = off;
-						}
-
-						ret = px4_ioctl(fd, PWM_SERVO_SET(i), val);
-
-						if (ret != OK) {
-							PX4_ERR("PWM_SERVO_SET(%d)", i);
-							goto err_out;
-						}
+					if (ret != OK) {
+						PX4_ERR("PWM_SERVO_SET(%d)", i);
+						goto err_out;
 					}
 				}
+			}
 
-				/* abort on user request */
+			/* abort on user request */
+			for(unsigned stop_index = 0 ; stop_index < 100 ; stop_index++) {
 				char c;
 				ret = poll(&fds, 1, 0);
 
@@ -474,31 +504,29 @@ err_out_no_test:
 					}
 				}
 
-				if (phase == 1) {
-					px4_usleep(steps_timings_us[steps_timing_index] / phase_maxcount);
+				// sleep
+				px4_usleep(10 * step_time);
+			}
 
-				} else if (phase == 0) {
-					px4_usleep(50000);
+			// update current PWM value
+			current_val = current_val + step_pwm;
+		}
 
-				} else if (phase == 2) {
-					px4_usleep(50000);
+		/* reset output to the last value */
+		for (unsigned i = 0; i < servo_count; i++) {
+			if (set_mask & 1 << i) {
+				ret = px4_ioctl(fd, PWM_SERVO_SET(i), last_spos.values[i]);
 
-				} else {
-					break;
-				}
-
-				phase_counter++;
-
-				if (phase_counter > phase_maxcount) {
-					phase++;
-					phase_counter = 0;
+				if (ret != OK) {
+					PX4_ERR("PWM_SERVO_SET(%d)", i);
+					goto err_out;
 				}
 			}
 		}
 
+		PX4_INFO("Finished...");
 		rv = 0;
 		goto err_out;
-
 
 	} else if (!strcmp(command, "info")) {
 
@@ -533,9 +561,9 @@ err_out_no_test:
 
 		struct pwm_output_values disarmed_pwm;
 
-		struct pwm_output_values min_pwm;
+		struct pwm_output_values min_pwm_str;
 
-		struct pwm_output_values max_pwm;
+		struct pwm_output_values max_pwm_str;
 
 		struct pwm_output_values trim_pwm;
 
@@ -553,14 +581,14 @@ err_out_no_test:
 			return 1;
 		}
 
-		ret = px4_ioctl(fd, PWM_SERVO_GET_MIN_PWM, (unsigned long)&min_pwm);
+		ret = px4_ioctl(fd, PWM_SERVO_GET_MIN_PWM, (unsigned long)&min_pwm_str);
 
 		if (ret != OK) {
 			PX4_ERR("PWM_SERVO_GET_MIN_PWM");
 			return 1;
 		}
 
-		ret = px4_ioctl(fd, PWM_SERVO_GET_MAX_PWM, (unsigned long)&max_pwm);
+		ret = px4_ioctl(fd, PWM_SERVO_GET_MAX_PWM, (unsigned long)&max_pwm_str);
 
 		if (ret != OK) {
 			PX4_ERR("PWM_SERVO_GET_MAX_PWM");
@@ -592,7 +620,7 @@ err_out_no_test:
 
 
 				printf(" failsafe: %d, disarmed: %d us, min: %d us, max: %d us, trim: %5.2f)",
-				       failsafe_pwm.values[i], disarmed_pwm.values[i], min_pwm.values[i], max_pwm.values[i],
+				       failsafe_pwm.values[i], disarmed_pwm.values[i], min_pwm_str.values[i], max_pwm_str.values[i],
 				       (double)((int16_t)(trim_pwm.values[i]) / 10000.0f));
 				printf("\n");
 
