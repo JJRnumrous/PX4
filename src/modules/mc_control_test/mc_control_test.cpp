@@ -44,7 +44,8 @@
 
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_local_position.h>
-#include <uORB/topics/step_input.h>
+#include <uORB/topics/vehicle_control_mode.h>
+#include <uORB/topics/vehicle_rates_setpoint.h>
 #include <uORB/topics/vehicle_command.h>
 
 #define STEP_TYPE ROLL_RATE
@@ -114,7 +115,7 @@ int MulticopterControlTest::task_spawn(int argc, char *argv[])
 
 	if (_task_id < 0) {
 		_task_id = -1;
-		return -errno;
+		return -1;
 	}
 
 	return 0;
@@ -207,28 +208,24 @@ void MulticopterControlTest::run()
 	int parameter_update_sub = orb_subscribe(ORB_ID(parameter_update));
 	parameters_update(parameter_update_sub, true);
 
-	// advertise to step_input
-	struct step_input_s step;
-    memset(&step, 0, sizeof(step));
-    orb_advert_t step_input_pub = orb_advertise(ORB_ID(step_input), &step);
+	// advertise to attitude_setpoint
+	struct vehicle_rates_setpoint_s att_sp;
+    memset(&att_sp, 0, sizeof(att_sp));
+    orb_advert_t att_sp_pub = orb_advertise(ORB_ID(vehicle_rates_setpoint), &att_sp);
+
+    // // advertise to control_mode
+	// struct vehicle_control_mode_s mode;
+    // memset(&mode, 0, sizeof(mode));
+    // orb_advert_t mode_pub = orb_advertise(ORB_ID(vehicle_control_mode), &mode);
+
+    // // publish to control_mode
+    // mode.flag_control_offboard_enabled = true;
+    // orb_publish(ORB_ID(vehicle_control_mode), mode_pub, &mode);
 
     // set everything to 0
-    step.valid = false;
-    step.x = NAN;
-    step.y = NAN;
-    step.z = NAN;
-    step.vx = NAN;
-    step.vy = NAN;
-    step.vz = NAN;
-    step.roll = NAN;
-    step.pitch = NAN;
-    step.yaw = NAN;
-    step.rollspeed = NAN;
-    step.pitchspeed = NAN;
-    step.yawspeed = NAN;
-    step.control_roll = false;
-    step.control_pitch = false;
-    step.control_yaw = false;
+    att_sp.roll = 0;
+    att_sp.pitch = 0;
+    att_sp.yaw = 0;
 
 	while (!should_exit()) {
 
@@ -242,8 +239,8 @@ void MulticopterControlTest::run()
 
             } else if (pret < 0) {
                 // this is undesirable but not much we can do
-                PX4_ERR("poll error %d, %d", pret, errno);
-                usleep(50000);
+                PX4_ERR("poll error %d, %d", pret, 0);
+                px4_usleep(50000);
                 continue;
 
             } else if (fds[0].revents & POLLIN) {
@@ -261,6 +258,15 @@ void MulticopterControlTest::run()
                 if(fabsf(_local_pos.z - takeoff_height) <= (float)(0.01) || ready)
                 {
                     ready = true;
+
+                    // advertise to control_mode
+                    struct vehicle_control_mode_s mode;
+                    memset(&mode, 0, sizeof(mode));
+                    orb_advert_t mode_pub = orb_advertise(ORB_ID(vehicle_control_mode), &mode);
+
+                    // publish to control_mode
+                    mode.flag_control_offboard_enabled = true;
+                    orb_publish(ORB_ID(vehicle_control_mode), mode_pub, &mode);
                 }
             }
 
@@ -271,22 +277,19 @@ void MulticopterControlTest::run()
 
         if(ready && !commanded) {
             // command step
-            command_step(_step_type, _val, &step, step_input_pub);
+            command_step(_step_type, _val, &att_sp, att_sp_pub);
 
             // don't publish another step input
-            commanded = true;
-            step_time = hrt_absolute_time();
+            // commanded = true;
+            // step_time = hrt_absolute_time();
         } else if(commanded && PX4_ISFINITE(_duration) && !step_down) {
             if(hrt_absolute_time() - step_time >= (float)_duration * 1e6f) {
                 // command down step
-                command_step(_step_type, 1e-6f, &step, step_input_pub); // Set back to 0. Well... Really close to 0
+                command_step(_step_type, 1e-6f, &att_sp, att_sp_pub); // Set back to 0. Well... Really close to 0
 
                 // don't publish another step input
                 step_down = true;
             }
-        } else if(!ready) {
-            step.valid = true;
-            orb_publish(ORB_ID(step_input), step_input_pub, &step);
         }
 	}
 
@@ -322,60 +325,41 @@ void MulticopterControlTest::parameters_update(int parameter_update_sub, bool fo
 	}
 }
 
-void MulticopterControlTest::command_step(enum StepType step_type, float val, struct step_input_s *step, orb_advert_t step_input_pub)
+void MulticopterControlTest::command_step(enum StepType step_type, float val, struct vehicle_rates_setpoint_s *att_sp, orb_advert_t att_sp_pub)
 {
     switch(step_type)
     {
     case ROLL_RATE:
-        step->rollspeed = val*(float)M_PI/180.0f;
-        step->control_roll = true;
+        att_sp->roll = val*(float)M_PI/180.0f;
         break;
     case PITCH_RATE:
-        step->pitchspeed = val*(float)M_PI/180.0f;
-        step->control_pitch = true;
+        att_sp->pitch = val*(float)M_PI/180.0f;
         break;
     case YAW_RATE:
-        step->yawspeed = val*(float)M_PI/180.0f;
-        step->control_yaw = true;
+        att_sp->yaw = val*(float)M_PI/180.0f;
         break;
     case ROLL:
-        step->roll = val*(float)M_PI/180.0f;
-        step->control_roll = true;
         break;
     case PITCH:
-        step->pitch = val*(float)M_PI/180.0f;
-        step->control_pitch = true;
         break;
     case YAW:
-        step->yaw = val*(float)M_PI/180.0f;
-        step->control_yaw = true;
         break;
     case VX:
-        step->vx = val;
-        step->control_pitch = true;
         break;
     case VY:
-        step->vy = val;
-        step->control_roll = true;
         break;
     case VZ:
-        step->vz = val;
         break;
     case N:
-        step->x = val;
-        step->control_pitch = true;
         break;
     case E:
-        step->y = val;
-        step->control_roll = true;
         break;
     case D:
-        step->z = val;
         break;
     }
-
-    step.valid = true;
-    orb_publish(ORB_ID(step_input), step_input_pub, &step);
+    
+    PX4_INFO("Step commanded!");
+    orb_publish(ORB_ID(vehicle_rates_setpoint), att_sp_pub, &att_sp);
 }
 
 int mc_control_test_main(int argc, char *argv[])

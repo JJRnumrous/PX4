@@ -112,6 +112,7 @@ private:
 	 */
 	void parameters_update(int parameter_update_sub, bool force = false);
 
-	void command_step(enum StepType step_type, float val, struct step_input_s *step);
+	void command_step(enum StepType step_type, float val, struct vehicle_rates_setpoint_s *att_sp, orb_advert_t att_sp_pub);
 };
 
+// mc_control_test start -t pitch_rate -v 1 -d 10 -h
