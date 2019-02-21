@@ -58,3 +58,6 @@
 	path = cmake/configs/uavcan_board_ident
 	url = https://github.com/PX4/uavcan_board_ident.git
 	branch = master
+[submodule "esl_sim"]
+	path = Tools/esl_sim
+	url = https://github.com/18177654/px4-sim.git

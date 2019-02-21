@@ -79,6 +79,11 @@ then
 	# Start Java simulator
 	"$src_path"/Tools/jmavsim_run.sh -r 250 -f $speed_factor &
 	SIM_PID=`echo $!`
+elif [ "$program" == "esl_sim" ] && [ ! -n "$no_sim" ]
+then
+	# Start ESL quad physics simulator
+	"$src_path"/Tools/esl_sim_run.sh &
+	SIM_PID=`echo $!`
 elif [ "$program" == "gazebo" ] && [ ! -n "$no_sim" ]
 then
 	if [ -x "$(command -v gazebo)" ]
